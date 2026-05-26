@@ -1,3 +1,7 @@
+// clang++ -std=c++11 royal.cpp lbfgs.c -o fluid
+// ./fluid
+// ffmpeg -framerate 30 -i test%d.png -c:v libx264 -pix_fmt yuv420p fluid.mp4
+
 #define _CRT_SECURE_NO_WARNINGS 1
 
 #include <iostream>
