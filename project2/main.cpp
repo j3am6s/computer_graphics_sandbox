@@ -16,7 +16,18 @@
 #include <cstdlib>
 #include <ctime>
 
+#include <random>
+#include <cstring>
+#include <cstdio>
+#ifndef M_PI
+#endif
+
 double sqr(double x) { return x * x; };
+
+//
+static std::default_random_engine engine(0);
+static std::uniform_real_distribution<double> uniform01(0.0, 1.0);
+//
 
 class Vector {
 public:
@@ -62,29 +73,53 @@ double dot(const Vector& a, const Vector& b) {
 
 class Polygon {
 public:
-
-    double area() {
-        if (vertices.size() < 3) return 0;
-        // TODO Lab 3
-        // Compute the area of the polygon
-        return -111;
+    double area() const {
+        if (vertices.size()<3) {
+            return 0;
+        }
+        double A =0;
+        for (int i = 0; i < (int)vertices.size(); i++) {
+            const Vector& P = vertices[i];
+            const Vector& Q = vertices[(i+1)%vertices.size()];
+            A+=P[0]*Q[1]-P[1]*Q[0];
+        }
+        return std::abs(0.5 * A);
     }
 
-    Vector centroid() {
-        if (vertices.size() < 3) return Vector(0, 0);
-        // TODO Lab 3
-        // Compute the centroid of the polygon
 
-        return Vector(-111,-111);
+    Vector centroid() const {
+        if (vertices.size()<3) {
+            return Vector(0, 0);
+        }
+        double A =0;
+        Vector C(0, 0);
+        for (int i = 0; i < (int)vertices.size(); i++) {
+            const Vector& P =vertices[i];
+            const Vector& Q =vertices[(i+1)%vertices.size()];
+            double c =P[0]*Q[1]-P[1]*Q[0];
+            A +=c;
+            C =C+(P+Q)*c;
+        }
+        if (std::abs(A) < 1e-14) {
+            return Vector(0, 0);
+        }
+        return C/(3.0*A);
     }
+
+
+
 
     double integral_square_distance(const Vector& Pi) {
-        if (vertices.size() < 3) return 0;
-
-        // TODO Lab 3
-        // Compute the integral of ||x-Pi||^2 over the polygon
-
-        return -111;
+        if (vertices.size()<3) {
+            return 0;
+        }
+        double a = 0;
+        for (int i = 0; i < (int)vertices.size(); i++) {
+            const Vector& A = vertices[i];
+            const Vector& B = vertices[(i + 1) % vertices.size()];
+            a += (A[0]*B[1]-A[1]*B[0]) * ((A.norm2() + dot(A, B) + B.norm2()) / 12.0 - dot(Pi, A + B) / 3.0 + Pi.norm2() / 2.0);
+        }
+        return std::abs(a);
     }
 
     std::vector<Vector> vertices;
@@ -185,9 +220,17 @@ void save_frame(const std::vector<Polygon>& cells, std::string filename, int fra
 
 class VoronoiDiagram {
 
+    //Tita BX24 walked me through this
+
 public:
 
     VoronoiDiagram() {
+        n_disk = 100;
+        unit_disk.resize(n_disk);
+        for (int i = 0; i < n_disk; i++) {
+            double theta = 2.0*M_PI * i/(double)n_disk;
+            unit_disk[i] =Vector(cos(theta), sin(theta));
+        }
     };
 
 
@@ -203,6 +246,10 @@ public:
         cells.clear();
         cells.resize(points.size());
 
+        if (weights.empty()) {
+            weights.resize(points.size(), 0.0);
+        }
+
         #pragma omp parallel for schedule(dynamic)
         for (int i=0; i <(int)points.size(); i++) {
             Polygon cell;
@@ -212,9 +259,23 @@ public:
             cell.vertices.push_back(Vector(0, 1));
             for (int j=0; j<(int)points.size(); j++) {
                 if (i == j) continue;
-                double wi=.0;
-                double wj=.0;
+                double wi = (i < (int)weights.size()) ? weights[i] : 0.0;
+                double wj = (j < (int)weights.size()) ? weights[j] : 0.0;
                 cell =clip_by_bisector(cell, points[i], points[j], wi, wj);
+                if (cell.vertices.empty()) {
+                    break;
+                }
+            }
+            if ((int)weights.size()==(int)points.size()+1 && !cell.vertices.empty()) {
+                double radius = sqrt(std::max(0.0, weights[i]-weights[weights.size()-1]));
+                for (int j = 0; j <n_disk; j++) {
+                    Vector u=points[i]+radius*unit_disk[j];
+                    Vector v=points[i]+radius*unit_disk[(j+1)%n_disk];
+                    cell=clip_by_edge(cell, u, v);
+                    if (cell.vertices.empty()) {
+                        break;
+                    }
+                }
             }
             cells[i] = cell;
         }
@@ -227,6 +288,42 @@ public:
         // Will be used to clip a polygon (a cell) by all the edges of a (discretized) disk
 
         Polygon result;
+        if (V.vertices.empty()) {
+            return result;
+        }
+        result.vertices.reserve(V.vertices.size()+1);
+
+        for (int i = 0; i<(int)V.vertices.size(); i++) {
+            Vector A =V.vertices[i];
+            Vector B =V.vertices[(i+1)% V.vertices.size()];
+            double da=(v-u)[0]*(A-u)[1]-(v-u)[1]*(A-u)[0];
+            double db=(v-u)[0]*(B-u)[1]-(v-u)[1]*(B-u)[0];
+            bool Ain = false;
+            if (da >= -1e-12) {
+                Ain=true;
+            }
+            bool Bin = false;
+            if (db >= -1e-12) {
+                Bin=true;
+            }
+            
+            if (Ain && Bin) {
+                result.vertices.push_back(B);
+            }
+            else if (Ain && !Bin) {
+                if (std::abs(da-db)>1e-20) {
+                    double t=da/(da-db);
+                    result.vertices.push_back(A+t*(B-A));
+                }
+            }
+            else if (!Ain && Bin) {
+                if (std::abs(da-db)>1e-20) {
+                    double t = da/(da-db);
+                    result.vertices.push_back(A+t*(B-A));
+                }
+                result.vertices.push_back(B);
+            }
+        }
 
         return result;
     }
@@ -254,8 +351,9 @@ public:
                 Bin=true;
             }
 
+
             Vector M= (Pi+Pj)/2+((w0-wi)/(2*N.norm2())) *N;
-            double a= dot(B-A, Pj-Pi);
+            // double a= dot(B-A, Pj-Pi);
             double t= dot(M -A, Pj-Pi)/dot(B-A, Pj-Pi);
             Vector P= A+t*(B-A);
 
@@ -267,6 +365,7 @@ public:
             }
             else if (!Ain && Bin) {
                 result.vertices.push_back(P);
+                result.vertices.push_back(B);
             }
         }
 
@@ -280,22 +379,57 @@ public:
     
     std::vector<Polygon> cells;   // Lab 1 : the polygons representing each individual cell
 
+    //for lab 3
+    std::vector<Vector> unit_disk;
+    int n_disk;
+
 };
 
+// Labs 2 and 3 : you may use this function to print debugging info.
+static int progress(
+    void* instance, const lbfgsfloatval_t* x, const lbfgsfloatval_t* g, const lbfgsfloatval_t fx,
+    const lbfgsfloatval_t xnorm, const lbfgsfloatval_t gnorm, const lbfgsfloatval_t step,
+    int n, int k, int ls) {
+    printf("Iteration %d:\n", k);
+    printf("fx = %f\n", fx);
+    printf("xnorm = %f, gnorm = %f, step = %f\n", xnorm, gnorm, step);
+    return 0;
+}
+static lbfgsfloatval_t evaluate(
+    void* instance,
+    const lbfgsfloatval_t* x,
+    lbfgsfloatval_t* g,
+    const int n,
+    const lbfgsfloatval_t step
+);
 
 // Lab 2 
 class OptimalTransport {
 
 public:
-    OptimalTransport() {};
+    OptimalTransport() {
+        fluid_volume = 0.6;
+    };
 
-    void optimize(){};
+    void optimize() {
+        int ret = 0;
+        int N =vor.weights.size();
+        lbfgsfloatval_t fx;
+        std::vector<double> weights(N, 0.0);
+        memcpy(&weights[0], &vor.weights[0], N * sizeof(weights[0]));
+        lbfgs_parameter_t param;
+        lbfgs_parameter_init(&param);
+        ret = lbfgs(N, &weights[0], &fx, evaluate, NULL, (void*)this, &param);
+        // lab 3 n+1 change
+        memcpy(&vor.weights[0], &weights[0], N * sizeof(weights[0]));
+        vor.compute();
+    }
 
     VoronoiDiagram vor;
+    double fluid_volume;
 };
 
 
-// Labs 2 and 3
 static lbfgsfloatval_t evaluate(
     void* instance,
     const lbfgsfloatval_t* x,
@@ -305,92 +439,109 @@ static lbfgsfloatval_t evaluate(
 )
 {
     OptimalTransport* ot = (OptimalTransport*)(instance);
-
-    // first compute the Voronoi diagram at the current optimization step
-    memcpy(&ot->vor.weights[0], x, n * sizeof(x[0]));
+    std::memcpy(&ot->vor.weights[0], x, n * sizeof(x[0]));
     ot->vor.compute();
-  
-   
+
+    
+
     // Lab 2 (Optimal transport) : compute the function to be minimized (fx) and its gradient (g[i], i=0..n-1)
     // Lab 3 (fluid) : adapt these functions to support partial optimal transport (now "n" has been increased by 1 to account for the air variable)
-    
+
     lbfgsfloatval_t fx = 0.0;
     // g[i] = ...
     // fx = ...
 
-    int i;
-    double s = 0;
-    g[i] =ot->vor.cells[i].area()-(0.6/(n-1));
-    //oulah
+    // An explained this to me
+
+    bool pot = (n == (int)ot->vor.points.size() + 1);
+    int Nfluid =pot ? n-1 : n;
+    double dvf= ot->fluid_volume;
+    double dva= 1.0-dvf;
+    double dpp= dvf/(double)Nfluid;
+    double t =0.0;
+
+    for (int i = 0; i < Nfluid; i++) {
+        double ai =ot->vor.cells[i].area();
+        t+=ai;
+        g[i]=dpp-ai;
+        fx+=ot->vor.cells[i].integral_square_distance(ot->vor.points[i]);
+        fx+=-x[i]*ai;
+        fx+=dpp*x[i];
+    }
+    if (pot) {
+        g[n - 1] = dva - (1.0-t);
+        fx += x[n - 1] * (dva - (1.0-t));
+    }
     return fx;
 }
 
-// Labs 2 and 3 : you may use this function to print debugging info.
-static int progress(
-    void* instance, const lbfgsfloatval_t* x, const lbfgsfloatval_t* g, const lbfgsfloatval_t fx,
-    const lbfgsfloatval_t xnorm, const lbfgsfloatval_t gnorm, const lbfgsfloatval_t step,
-    int n, int k, int ls) {
-    printf("Iteration %d:\n", k);
-    printf("  fx = %f\n", fx);
-    printf("  xnorm = %f, gnorm = %f, step = %f\n", xnorm, gnorm, step);
-    printf("\n");
-    return 0;
-}
-
-
-// Lab 2
-void OptimalTransport::optimize() {
-
-    lbfgsfloatval_t fx;
-    std::vector<double> weights(vor.weights);
-
-
-    //
-    memcpy(&weights[0], &vor.weights[0], vor.weights.size()*sizeof(weights[0]));
-    //
-
-    lbfgs_parameter_t param;
-    // Initialize the parameters for the L-BFGS optimization.
-    lbfgs_parameter_init(&param);
-
-    // run the LBFGS optimizer
-    int ret = lbfgs(weights.size(), &weights[0], &fx, evaluate, progress, (void*)this, &param);
-
-    // maybe after
-    memcpy(&vor.weights[0], &weights[0], (vor.weights.size()-1) * sizeof(weights[0]));
-    //
-
-    // copy the result back to the voronoi structure
-    vor.weights = weights;
-
-    // finally recompute the Voronoi diagram with the final optimized weights
-    vor.compute();
-}
 
 
 
 // Lab 3 (fluids)
 class Fluid {
 public:
-    Fluid(int N_particles = 1000) : N_particles(N_particles) {
+    Fluid(int N_particles = 10000) : N_particles(N_particles) {
+        fluid_volume = 0.6;
+        particles.resize(N_particles);
+        velocities.resize(N_particles, Vector(0, 0));
+        for (int i = 0; i < N_particles; i++) {
+            particles[i] = Vector(0.1+0.8*uniform01(engine), 0.1+0.8*uniform01(engine));
+        }
+        ot.fluid_volume =fluid_volume;
+        ot.vor.points =particles;
+        // ot.vor.weights.resize(N_particles+1, 1.0);
+        // ot.vor.weights[N_particles] = 0.9;
+        ot.vor.weights.resize(N_particles + 1, 0.0);
+        ot.vor.weights[N_particles] = -0.001;
+        ot.vor.compute();
     }
 
     // Lab 3 : advance the simulation dt in time
     void time_step(double dt) {
-
-        double epsilon2 = 0.004 * 0.004;
+        double epsilon = 0.004;
         Vector g(0, -9.81);
-        double m_i = 200;
+        double m_i = 200.0;
 
         // TODO Lab 3 : 
         // Compute semi-discrete partial optimal transport
         // for all particles, add gravity and spring force towards cell centroid, integrate acceleration->velocity and velocity->position
+
+        ot.vor.points = particles;
+        ot.optimize();
+
+        for (int i = 0; i < N_particles; i++) {
+            if (ot.vor.cells[i].vertices.size()<3) {
+                continue;
+            }
+            Vector centroid =ot.vor.cells[i].centroid();
+            Vector F_spring =(centroid-particles[i])/(epsilon*epsilon);
+            Vector F = F_spring+m_i*g;
+            velocities[i] =velocities[i]+(dt/m_i)*F;
+            particles[i] =particles[i]+dt*velocities[i];
+            if (particles[i][0]<0) {
+                particles[i][0]=0;
+                velocities[i][0]*=-0.5;
+            }
+            if (particles[i][0]>1) {
+                particles[i][0]=1;
+                velocities[i][0]*=-0.5;
+            }
+            if (particles[i][1]<0) {
+                particles[i][1]=0;
+                velocities[i][1]*=-0.5;
+            }
+            if (particles[i][1]>1) {
+                particles[i][1]=1;
+                velocities[i][1]*=-0.5;
+            }
+        }
     }
 
     // just run the full simulation
     void run_simulation() {
-        double dt = 0.002;
-        for (int i = 0; i < 1000; i++) {
+        double dt = 0.006; // made it a bit faster
+        for (int i = 0; i < 85; i++) {
             time_step(dt);
             save_frame(ot.vor.cells, "test", i);
         }
@@ -434,32 +585,10 @@ void save_svg(const std::vector<Polygon>& polygons, std::string filename, const 
 
 
 
-
 int main() {
-
-    int N = 50;
-    VoronoiDiagram Vor;
-    for (int i=0; i<N; i++){
-    //    
-    }
-    Vor.compute();
-    OptimalTransport ot;
-    ot.vor = Vor;
-    ot.optimize();
-    save_svg(ot.vor.cells, "test.svg");
-
-    // Polygon p;
-    // p.vertices.push_back(Vector(0.1, 0.2));
-    // p.vertices.push_back(Vector(0.6, 0.4));
-    // p.vertices.push_back(Vector(0.5, 0.7));
-    // p.vertices.push_back(Vector(0.2, 0.5));
-
-    // std::vector<Polygon> s;
-    // s.push_back(p);
-
-    // save_frame(s, "toto");
-    // save_svg(s, "toto.svg");
-    // return 0;
+    Fluid fluid(100);
+    fluid.run_simulation();
+    return 0;
 }
 
     
