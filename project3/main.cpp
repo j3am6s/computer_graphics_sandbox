@@ -7,6 +7,12 @@
 #include <string>
 #include <fstream>
 
+
+
+//
+#include <algorithm>
+//
+
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
@@ -203,18 +209,74 @@ public:
 	}
 	
 
+    // void Tutte() {
+		
+		
+	// 	uvs.resize(vertices.size());
+		
+	// 	// TODO : fill the uv coordinates with Tutte embedding
+	// 	// locate boundary vertices
+	// 	// put them on a unit circle within [0,1]^2
+	// 	// then iterate : for each interior vertices, set their parameterization to be the average of their neighbor's parameterization.
+		
+		
+	// }
+
     void Tutte() {
-		
-		
-		uvs.resize(vertices.size());
-		
-		// TODO : fill the uv coordinates with Tutte embedding
-		// locate boundary vertices
-		// put them on a unit circle within [0,1]^2
-		// then iterate : for each interior vertices, set their parameterization to be the average of their neighbor's parameterization.
-		
-		
-	}
+        uvs.resize(vertices.size());
+        std::vector<std::vector<int> > n(vertices.size());
+        std::map<std::pair<int, int>, int> e;
+        for (int i = 0; i < (int)indices.size(); i++) {
+            int v[3] = {
+                indices[i].vtx[0],
+                indices[i].vtx[1],
+                indices[i].vtx[2]
+            };
+            for (int j = 0; j<3; j++) {
+                int a = v[j];
+                int b = v[(j+1)%3];
+                n[a].push_back(b);
+                n[b].push_back(a);
+                if (a > b) std::swap(a, b);
+                e[std::make_pair(a, b)]++;
+            }
+        }
+        std::vector<bool> b(n, false);
+        std::vector<int> bv;
+        //with help from Angela BX25
+        for (std::map<std::pair<int, int>, int>::iterator it = e.begin(); it != e.end(); ++it) {
+            if (it->second ==1) {
+                if (!b[it->first.first]) {
+                    b[it->first.first] = true;
+                    bv.push_back(it->first.first);
+                }
+                if (!b[it->first.second]) {
+                    b[it->first.second] = true;
+                    bv.push_back(it->first.second);
+                }
+            }
+        }
+        for (int i = 0; i < (int)bv.size(); i++) {
+            uvs[bv[i]] = Vector(0.5+0.45*cos(2*M_PI*i/bv.size()), 0.5+0.45*sin(2*M_PI*i/bv.size()),0);
+        }
+        for (int i = 0; i <n; i++) {
+            if (!b[i]) {
+                uvs[i] = Vector(0.5, 0.5, 0);
+            }
+        }
+        for (int iter=0; iter<1000; iter++) {
+            std::vector<Vector> nouv = uvs;
+            for (int v = 0; v < n; v++) {
+                Vector av(0, 0, 0);
+                for (int j = 0; j < (int)n[v].size(); j++) {
+                    av+=uvs[n[v][j]];
+                }
+                av/=n[v].size();
+                nouv[v]=av;
+            }
+            uvs = nouv;
+        }
+    }
 	
 
 	void save_image(std::string filename) {
